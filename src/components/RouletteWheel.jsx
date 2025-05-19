@@ -1,5 +1,4 @@
-import React, { useEffect } from "react";
-
+import React, { useEffect, useCallback } from "react";
 
 const COLORS = {
   profit: "#22c55e",
@@ -7,11 +6,20 @@ const COLORS = {
   rekt: "#ef4444",
   fomo: "#a21caf"
 };
+
 const LABELS = {
   profit: "익절",
   stopLoss: "손절",
   rekt: "청산",
   fomo: "FOMO"
+};
+
+// 레버리지별 구성을 상수로 분리
+const LEVERAGE_CONFIG = {
+  1: { profit: 15, stopLoss: 30, rekt: 45, fomo: 10 },
+  10: { profit: 40, stopLoss: 25, rekt: 25, fomo: 10 },
+  50: { profit: 40, stopLoss: 25, rekt: 25, fomo: 10 },
+  100: { profit: 45, stopLoss: 20, rekt: 20, fomo: 15 }
 };
 
 const describeArc = (cx, cy, r, startAngle, endAngle) => {
@@ -35,58 +43,109 @@ const describeArc = (cx, cy, r, startAngle, endAngle) => {
   ].join(" ");
 };
 
+// Fixed segment selection function
 const getSegmentByAngle = (rotation, config) => {
-  const wedges = [
-    { key: "profit", value: config.profit },
-    { key: "stopLoss", value: config.stopLoss },
-    { key: "rekt", value: config.rekt },
-    { key: "fomo", value: config.fomo }
-  ];
-
-  let current = 0;
-  const segments = wedges.map(({ key, value }) => {
-    const start = (current + 270) % 360;
-    const end = (start + value * 3.6) % 360;
-    current += value * 3.6;
-    return { key, start, end };
-  });
-
+  // 회전 각도를 0-360 범위로 정규화
   const normalizedRotation = ((rotation % 360) + 360) % 360;
-  const arrowAngle = (270 - normalizedRotation + 360) % 360;
-
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i];
-    const isLast = i === segments.length - 1;
   
-    if (seg.start < seg.end) {
-      if (
-        (arrowAngle >= seg.start && arrowAngle < seg.end) ||
-        (isLast && arrowAngle === seg.end)
-      ) {
-        return seg.key;
+  // 화살표는 항상 270도(위)를 가리킴
+  // 휠이 회전하면 화살표 위치에 어떤 세그먼트가 오는지 계산
+  // 기준점은 270도 (화살표 위치)
+  const arrowPosition = 270;
+  
+  // 세그먼트의 각도 계산 (시계 방향)
+  let startAngle = 270; // 화살표 위치부터 시작
+  
+  // 세그먼트 정의 (시계 방향으로 회전)
+  const segments = [];
+  
+  // profit 세그먼트
+  segments.push({
+    name: "profit",
+    start: startAngle,
+    end: (startAngle + config.profit * 3.6) % 360,
+    value: config.profit
+  });
+  startAngle = segments[0].end;
+  
+  // stopLoss 세그먼트
+  segments.push({
+    name: "stopLoss",
+    start: startAngle,
+    end: (startAngle + config.stopLoss * 3.6) % 360,
+    value: config.stopLoss
+  });
+  startAngle = segments[1].end;
+  
+  // rekt 세그먼트
+  segments.push({
+    name: "rekt",
+    start: startAngle,
+    end: (startAngle + config.rekt * 3.6) % 360,
+    value: config.rekt
+  });
+  startAngle = segments[2].end;
+  
+  // fomo 세그먼트
+  segments.push({
+    name: "fomo",
+    start: startAngle,
+    end: (startAngle + config.fomo * 3.6) % 360,
+    value: config.fomo
+  });
+  
+  // 회전에 따른 실제 화살표가 가리키는 위치 계산
+  // 회전이 시계 방향이면, 화살표의 상대적 위치는 반시계 방향으로 이동
+  const effectiveArrowPosition = (arrowPosition - normalizedRotation + 360) % 360;
+  
+  // 디버깅 정보
+  console.log(`Rotation: ${normalizedRotation}°, Arrow at: ${effectiveArrowPosition}°`);
+  segments.forEach(segment => {
+    console.log(`${segment.name}: ${segment.start}° ~ ${segment.end}° (${segment.value}%)`);
+  });
+  
+  // 현재 화살표 위치에 해당하는 세그먼트 찾기
+  for (const segment of segments) {
+    // 0도를 지나는 세그먼트 (end < start)
+    if (segment.end < segment.start) {
+      if (effectiveArrowPosition >= segment.start || effectiveArrowPosition < segment.end) {
+        console.log(`Selected segment (wrap): ${segment.name}`);
+        return segment.name;
       }
-    } else {
-      if (
-        arrowAngle >= seg.start || arrowAngle < seg.end ||
-        (isLast && arrowAngle === seg.end)
-      ) {
-        return seg.key;
-      }
+    } 
+    // 일반적인 세그먼트
+    else if (effectiveArrowPosition >= segment.start && effectiveArrowPosition < segment.end) {
+      console.log(`Selected segment (normal): ${segment.name}`);
+      return segment.name;
     }
   }
-
-  return null;
+  
+  // 기본값 반환 (이론적으로 여기까지 오지 않아야 함)
+  console.error("No segment found at rotation: " + normalizedRotation);
+  return "profit"; // 기본값
 };
 
 const RouletteWheel = ({ spinnerRef, rotation, leverage, onSelect }) => {
-  const leverageConfig = {
-    1: { profit: 15, stopLoss: 30, rekt: 45, fomo: 10 },
-    10: { profit: 40, stopLoss: 25, rekt: 25, fomo: 10 },
-    50: { profit: 55, stopLoss: 15, rekt: 15, fomo: 15 },
-    100: { profit: 70, stopLoss: 10, rekt: 10, fomo: 10 }
-  }[leverage];
+  // 숫자로 변환하여 안전하게 접근
+  const numericLeverage = Number(leverage);
+  const leverageConfig = LEVERAGE_CONFIG[numericLeverage] || LEVERAGE_CONFIG[10]; // 기본값 설정
 
+  // 메모이제이션된 세그먼트 선택 함수
+  const getSelectedSegment = useCallback(() => {
+    if (!leverageConfig) return null;
+    
+    return getSegmentByAngle(rotation, leverageConfig);
+  }, [rotation, leverageConfig]);
 
+  // 결과 전달 effect
+  useEffect(() => {
+    if (onSelect && typeof onSelect === "function") {
+      const result = getSelectedSegment();
+      onSelect(result);
+    }
+  }, [onSelect, getSelectedSegment]);
+
+  // 구간 데이터 준비
   const wedgeKeys = ["profit", "stopLoss", "rekt", "fomo"];
   const wedges = wedgeKeys.map(key => ({
     key,
@@ -136,8 +195,16 @@ const RouletteWheel = ({ spinnerRef, rotation, leverage, onSelect }) => {
 
   currentAngle = 0;
 
+  // 현재 선택된 세그먼트
+  const selectedSegment = getSelectedSegment();
+
   return (
     <div className="relative flex justify-center items-center w-[256px] h-[256px] mx-auto">
+      {/* 디버그 정보 표시 */}
+      <div className="absolute top-[-30px] left-0 text-xs text-gray-500 w-full text-center">
+        {numericLeverage}배 / 선택: {selectedSegment}
+      </div>
+      
       <div
         className="absolute z-50"
         style={{
