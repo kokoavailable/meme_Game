@@ -20,10 +20,11 @@ const MemeCoinGame = () => {
   const [spinSpeed, setSpinSpeed] = useState(10);
   const [currentRotation, setCurrentRotation] = useState(0);
   const [gameHistory, setGameHistory] = useState([]);
+  const [selectedSegment, setSelectedSegment] = useState(null);
   const spinnerRef = useRef(null);
   const spinIntervalRef = useRef(null);
 
-  // leverage settings & meme assets kept the same
+  // 레버리지별 설정 - RouletteWheel 컴포넌트와 동일한 확률 사용
   const leverageSettings = {
     1: {
       probabilities: { profit: 15, stopLoss: 30, rekt: 45, fomo: 10 },
@@ -34,11 +35,11 @@ const MemeCoinGame = () => {
       results: { profit: 200, stopLoss: -40, rekt: -30, fomo: -10 }
     },
     50: {
-      probabilities: { profit: 70, stopLoss: 10, rekt: 10, fomo: 10 },
+      probabilities: { profit: 40, stopLoss: 25, rekt: 25, fomo: 10 },
       results: { profit: 400, stopLoss: -25, rekt: -10, fomo: -10 }
     },
     100: {
-      probabilities: { profit: 85, stopLoss: 5, rekt: 5, fomo: 5 },
+      probabilities: { profit: 45, stopLoss: 20, rekt: 20, fomo: 15 },
       results: { profit: 800, stopLoss: -10, rekt: -5, fomo: -10 }
     }
   };
@@ -69,45 +70,51 @@ const MemeCoinGame = () => {
     ]
   };
 
-  const getSegmentByAngle = (rotation, config) => {
-    const wedgeKeys = ["profit", "stopLoss", "rekt", "fomo"];
-    const wedges = wedgeKeys.map(key => ({
-      key,
-      value: config[key]
-    }));
-  
-    let current = 0;
-    const segments = wedges.map(({ key, value }) => {
-      const start = (current + 270) % 360;
-      const end = (start + value * 3.6) % 360;
-      current += value * 3.6;
-      return { key, start, end };
-    });
-  
-    const normalizedRotation = ((rotation % 360) + 360) % 360;
-    const arrowAngle = (270 - normalizedRotation + 360) % 360;
-  
-    for (let i = 0; i < segments.length; i++) {
-      const seg = segments[i];
-      const isLast = i === segments.length - 1;
-  
-      if (seg.start < seg.end) {
-        if (
-          (arrowAngle >= seg.start && arrowAngle < seg.end) ||
-          (isLast && arrowAngle === seg.end)
-        ) return seg.key;
-      } else {
-        if (
-          arrowAngle >= seg.start || arrowAngle < seg.end ||
-          (isLast && arrowAngle === seg.end)
-        ) return seg.key;
-      }
-    }
-  
-    return null;
+  // 룰렛 휠 컴포넌트에서 선택된 결과를 수신하는 콜백 함수
+  const handleSegmentSelect = (segment) => {
+    setSelectedSegment(segment);
   };
-  
 
+  const startSpin = () => {
+    if (balance <= 0) return;
+    
+    setIsSpinning(true);
+    setShowResults(false);
+    setMemeAsset(null);
+    setSelectedSegment(null); // 선택된 세그먼트 초기화
+    
+    // 시작시 회전 각도 저장
+    const startRotation = currentRotation;
+    
+    // 결과 사전 계산 (이제 실제로 사용하지 않음 - 휠의 회전 결과를 사용)
+    const targetResult = calculateResult();
+    
+    // 무작위 회전 각도 (2-4 바퀴) + 타겟 각도
+    const minSpins = 2;
+    const maxSpins = 4;
+    const spins = minSpins + Math.random() * (maxSpins - minSpins);
+    const totalRotation = spins * 360 + Math.random() * 360;
+    
+    let currentSpeed = spinSpeed;
+    let currentAngle = startRotation;
+    
+    spinIntervalRef.current = setInterval(() => {
+      // 점점 느려지게 회전
+      if (currentAngle >= startRotation + totalRotation - 360) {
+        currentSpeed = Math.max(1, currentSpeed * 0.97);
+      }
+      
+      currentAngle += currentSpeed;
+      setCurrentRotation(currentAngle);
+      
+      // 목표 각도에 도달하면 정지
+      if (currentAngle >= startRotation + totalRotation) {
+        stopSpin();
+      }
+    }, 16);
+  };
+
+  // 이제 calculateResult는 실제로 사용되지 않지만, 구현은 유지
   const calculateResult = () => {
     const probs = leverageSettings[leverage].probabilities;
     const rand = Math.random() * 100;
@@ -117,36 +124,30 @@ const MemeCoinGame = () => {
     return "fomo";
   };
 
-  const startSpin = () => {
-    if (balance <= 0) return;
-    setIsSpinning(true);
-    setShowResults(false);
-    setMemeAsset(null);
-    let rotation = currentRotation;
-    spinIntervalRef.current = setInterval(() => {
-      rotation += spinSpeed;
-      setCurrentRotation(rotation);
-    }, 16);
-    setSpinSpeed(10 + Math.random() * 5);
-  };
-
   const stopSpin = () => {
     clearInterval(spinIntervalRef.current);
-    const probs = leverageSettings[leverage].probabilities;
-    const outcome = getSegmentByAngle(currentRotation % 360, probs);
+    
+    // 룰렛 휠에서 선택된 세그먼트를 결과로 사용
+    const outcome = selectedSegment || "profit";
+    
     const resultPercent = leverageSettings[leverage].results[outcome];
     const changeAmount = balance * (resultPercent / 100);
     const newBalance = Math.max(0, balance + changeAmount);
     const isLegendary = leverage === 100 && outcome === "profit";
+    
     setResult(outcome);
     setResultMessage(`${resultPercent > 0 ? "+" : ""}${resultPercent}% (${changeAmount.toFixed(2)}$)`);
+    
     const assets = isLegendary ? memeAssets.legendary : memeAssets[outcome];
     setMemeAsset(assets[Math.floor(Math.random() * assets.length)]);
+    
     setBalance(newBalance);
     if (newBalance > highScore) setHighScore(newBalance);
+    
     setGameHistory(prev => [{
       id: Date.now(), leverage, outcome, resultPercent, prevBalance: balance, newBalance
     }, ...prev].slice(0, 10));
+    
     setTimeout(() => {
       setShowResults(true);
       setIsSpinning(false);
@@ -160,6 +161,7 @@ const MemeCoinGame = () => {
     setResult(null);
   };
 
+  // 컴포넌트 언마운트 시 인터벌 정리
   useEffect(() => () => clearInterval(spinIntervalRef.current), []);
 
   const themeColors = isDarkTheme
@@ -184,6 +186,7 @@ const MemeCoinGame = () => {
               spinnerRef={spinnerRef}
               rotation={currentRotation}
               leverage={leverage}
+              onSelect={handleSegmentSelect}
             />
             <div className="mt-6 flex justify-center gap-4">
               {!isSpinning ? (
@@ -227,4 +230,5 @@ const MemeCoinGame = () => {
     </div>
   );
 };
+
 export default MemeCoinGame;
